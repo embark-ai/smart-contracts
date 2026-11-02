@@ -1,0 +1,12 @@
+{
+  "chainId": 56,
+  "timestamp": 1793191629,
+  "deployer": "0x0f30866Bb44ADC8a977d890e561403a7Cc3f0601",
+  "entryPoint": "0x0000000071727De22E5E9d8BAf0edAc6f37da032",
+  "lumiaAccountFactory": "0x17444C55ebFD850d171d046Ce08F7fbc3859497b",
+  "lumiaAccountImplementation": "0xCd2d8c054904287f47f2612a0aDaF6cc4d12D7AB",
+  "lumiaPaymasterV2": "0x96C9371DD267d510B306B5fedca509Caab52aC7c",
+  "targetRegistry": "0xE49Be15DC1900bB1fbd4F1F4681946f6F94679cf",
+  "lumiaPaymasterV3": "0x8cc341f81959dFF83A0E93A02665D5306592326f",
+  "simplePaymaster": "0x0000000000000000000000000000000000000000"
+}
