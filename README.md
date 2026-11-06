@@ -46,8 +46,8 @@ All contracts are verified on Sourcify. Configuration, transactions and verifica
 Requires [Foundry](https://book.getfoundry.sh/getting-started/installation).
 
 ```bash
-git clone --recursive https://github.com/LumiaChain/lumiaid-aa-demo-contracts.git
-cd lumiaid-aa-demo-contracts
+git clone --recursive https://github.com/embark-ai/smart-contarcts.git
+cd smart-contarcts
 forge build
 forge test
 ```

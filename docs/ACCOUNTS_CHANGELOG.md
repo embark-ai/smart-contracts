@@ -4,8 +4,33 @@ Changes to the smart account and its factory, by account version (`LumiaAccount.
 
 | Version | Commit | Date | Summary |
 |---|---|---|---|
+| **3.0.0** | _(this branch)_ | 2026-11-07 | ERC-1271 + `executeFromExecutor` for MetaMask Delegation Framework (ERC-7710) |
 | **2.0.0** | `035164f` | 2026-10-27 | Factory-bound accounts: account registry, upgrades restricted to factory-approved implementations |
 | **1.0.0** | `a263906` | 2025-08-20 | eth-infinitism `SimpleAccount` pattern, UUPS, CREATE2 factory |
+
+---
+
+## v3.0.0 — Delegation Framework (ERC-7710)
+
+Extends the same `LumiaAccount` for MetaMask `DelegationManager` redeem. No separate account type.
+
+### LumiaAccount
+
+| | v2.0.0 | v3.0.0 |
+|---|---|---|
+| Constructor | `(entryPoint, factory)` | `(entryPoint, factory, delegationManager)` |
+| `delegationManager()` | — | immutable; only this address may call `executeFromExecutor` |
+| ERC-1271 | — | `isValidSignature(hash, signature)` — raw hash, owner ECDSA |
+| Executor entry | — | `executeFromExecutor(mode, executionCalldata)` — ERC-7579 single/batch, `EXECTYPE_DEFAULT` only |
+| `version()` | `"2.0.0"` | `"3.0.0"` |
+
+Storage layout unchanged (`delegationManager` is immutable on the implementation). Owner/`execute`/`validateUserOp` semantics unchanged.
+
+Pulsar/Lark testnet DM (verified MetaMask DF `1.3.0`): `0xd2B20CDB5aFdf06d54797a032505F4E025FF99d3`.
+
+### LumiaAccountFactory
+
+Constructor is now `constructor(IEntryPoint, address delegationManager)`. The live Pulsar factory still has an immutable v2 implementation, so **new CREATE2 accounts with v3 need a newly deployed factory** (or upgrade existing proxies to a v3 impl approved on the legacy factory).
 
 ---
 

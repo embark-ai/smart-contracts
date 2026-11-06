@@ -82,7 +82,9 @@ contract AuditFixesTest is Test {
         } else {
             entryPoint = new EntryPoint();
         }
-        factory = new LumiaAccountFactory(IEntryPoint(address(entryPoint)));
+        // Local DM stand-in; Lark Pulsar uses 0xd2B20CDB5aFdf06d54797a032505F4E025FF99d3
+        address dm = address(0xD10);
+        factory = new LumiaAccountFactory(IEntryPoint(address(entryPoint)), dm);
         account = factory.createAccount(owner, 0);
         counter = new Counter();
 
@@ -336,7 +338,8 @@ contract AuditFixesTest is Test {
     /// @dev A factory account cannot escape to arbitrary code through a sponsored self-upgrade.
     function testLow_FactoryAccountCannotUpgradeToRogueImplementation() public {
         paymasterV2.setAllowlistFlags(false, false, false);
-        LumiaAccount rogueImpl = new LumiaAccount(IEntryPoint(address(entryPoint)), factory);
+        LumiaAccount rogueImpl =
+            new LumiaAccount(IEntryPoint(address(entryPoint)), factory, account.delegationManager());
         bytes32 implSlot = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
         bytes32 implBefore = vm.load(address(account), implSlot);
 

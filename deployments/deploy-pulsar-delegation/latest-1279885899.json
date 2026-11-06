@@ -1,0 +1,18 @@
+{
+  "chainId": 1279885899,
+  "timestamp": 1794002371,
+  "deployer": "0x0f30866Bb44ADC8a977d890e561403a7Cc3f0601",
+  "entryPoint": "0x0000000071727De22E5E9d8BAf0edAc6f37da032",
+  "delegationManager": "0xd2B20CDB5aFdf06d54797a032505F4E025FF99d3",
+  "allowedTargetsEnforcer": "0xFa188D464834152D0516BE64290c19e5e3134f9F",
+  "allowedMethodsEnforcer": "0x72a82a5E86a87b2FA3455802A73a6B469C0E9D52",
+  "allowedCalldataEnforcer": "0x151d56575d566c06d34d07E0a59834Ffc1eba90B",
+  "exactCalldataEnforcer": "0x4F8Dcc43A64fD8A923C90d799DeA25782553Ff57",
+  "erc20BalanceChangeEnforcer": "0xf3Ee0f1ad4c5f9c86b8f671D6b9d08De522223DE",
+  "timestampEnforcer": "0xcA3E82Ca4B441F9cE1aEA040bBa14FE5d2d79476",
+  "limitedCallsEnforcer": "0x2a8E0D53d0D734b5D15cB0d2A95a8c1Fa790F8CC",
+  "lumiaAccountFactory": "0x244886E3c89aE67f252f30E7125C5f7385b7787F",
+  "lumiaAccountImplementation": "0xa31eA1835A4F2cBfEa5CA393cB952e1ADb45F2A7",
+  "targetRegistry": "0xb91BeE0dCb99573c8d56Edc09D87c202A71a2DD3",
+  "lumiaPaymasterV3": "0xbEbe9A85cF34C51a48445131634ee33e1425Ad70"
+}

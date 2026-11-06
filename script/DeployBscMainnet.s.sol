@@ -2,6 +2,8 @@
 pragma solidity ^0.8.28;
 
 import "forge-std/Script.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "../src/LumiaAccount.sol";
 import "../src/LumiaAccountFactory.sol";
 import "../src/TargetRegistry.sol";
 import {LumiaPaymasterV2} from "../src/LumiaPaymasterV2.sol";
@@ -28,6 +30,7 @@ interface IPaymasterDeposit {
  *      - PAYMASTER_STAKE / PAYMASTER_UNSTAKE_DELAY: EntryPoint stake for V2 and V3 (see PaymasterStake).
  *      - USE_USER_ALLOWLIST / USE_BUNDLER_ALLOWLIST / USE_GAS_LIMITS: V2 and V3 flags (default false).
  *      - USE_PROJECT_ALLOWLIST: V3 project allowlist flag (default false).
+ *      - DELEGATION_MANAGER: MetaMask DelegationManager address baked into the account impl (required).
  *
  *      Addresses are written to deployments/deploy-bsc-mainnet/ (timestamped file and latest-56.json).
  */
@@ -48,6 +51,7 @@ contract DeployBscMainnet is PaymasterStake {
     struct Deployed {
         address factory;
         address accountImplementation;
+        address delegationManager;
         address paymasterV2;
         address targetRegistry;
         address paymasterV3;
@@ -58,6 +62,8 @@ contract DeployBscMainnet is PaymasterStake {
 
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(deployerPrivateKey);
+        address delegationManager = vm.envAddress("DELEGATION_MANAGER");
+        require(delegationManager != address(0), "DELEGATION_MANAGER required");
         uint256 initialDeposit = vm.envOr("INITIAL_DEPOSIT", DEFAULT_INITIAL_DEPOSIT);
         Flags memory flags = Flags({
             user: vm.envOr("USE_USER_ALLOWLIST", false),
@@ -70,10 +76,11 @@ contract DeployBscMainnet is PaymasterStake {
         console.log("Chain id:", block.chainid);
         console.log("Deployer:", deployer);
         console.log("EntryPoint:", ENTRYPOINT_V07);
+        console.log("DelegationManager:", delegationManager);
         console.log("Initial deposit per paymaster (wei):", initialDeposit);
 
         vm.startBroadcast(deployerPrivateKey);
-        Deployed memory d = _deployAll(flags, initialDeposit);
+        Deployed memory d = _deployAll(flags, initialDeposit, delegationManager);
         vm.stopBroadcast();
 
         _verifyDeployment(d, deployer, flags);
@@ -85,10 +92,14 @@ contract DeployBscMainnet is PaymasterStake {
         }
     }
 
-    function _deployAll(Flags memory flags, uint256 initialDeposit) internal returns (Deployed memory d) {
-        LumiaAccountFactory factory = new LumiaAccountFactory(IEntryPoint(ENTRYPOINT_V07));
+    function _deployAll(Flags memory flags, uint256 initialDeposit, address delegationManager)
+        internal
+        returns (Deployed memory d)
+    {
+        LumiaAccountFactory factory = new LumiaAccountFactory(IEntryPoint(ENTRYPOINT_V07), delegationManager);
         d.factory = address(factory);
         d.accountImplementation = factory.implementation();
+        d.delegationManager = delegationManager;
 
         d.paymasterV2 = address(
             new LumiaPaymasterV2(IEntryPoint(ENTRYPOINT_V07), flags.user, flags.bundler, flags.gasLimits)
@@ -121,6 +132,11 @@ contract DeployBscMainnet is PaymasterStake {
             address(LumiaAccount(payable(d.accountImplementation)).factory()) == d.factory,
             "implementation factory mismatch"
         );
+        require(factory.delegationManager() == d.delegationManager, "factory DM mismatch");
+        require(
+            LumiaAccount(payable(d.accountImplementation)).delegationManager() == d.delegationManager,
+            "implementation DM mismatch"
+        );
         require(Ownable(d.paymasterV2).owner() == deployer, "V2 owner mismatch");
         require(Ownable(d.paymasterV3).owner() == deployer, "V3 owner mismatch");
         require(Ownable(d.targetRegistry).owner() == deployer, "registry owner mismatch");
@@ -135,6 +151,7 @@ contract DeployBscMainnet is PaymasterStake {
         console.log("\n=== Deployment summary (BSC Mainnet, chainId 56) ===");
         console.log("LumiaAccountFactory: ", d.factory);
         console.log("LumiaAccount impl:   ", d.accountImplementation);
+        console.log("DelegationManager:   ", d.delegationManager);
         console.log("LumiaPaymasterV2:    ", d.paymasterV2);
         console.log("TargetRegistry:      ", d.targetRegistry);
         console.log("LumiaPaymasterV3:    ", d.paymasterV3);
@@ -153,7 +170,8 @@ contract DeployBscMainnet is PaymasterStake {
             ",\n  \"deployer\": \"", vm.toString(deployer),
             "\",\n  \"entryPoint\": \"", vm.toString(ENTRYPOINT_V07),
             "\",\n  \"lumiaAccountFactory\": \"", vm.toString(d.factory),
-            "\",\n  \"lumiaAccountImplementation\": \"", vm.toString(d.accountImplementation)
+            "\",\n  \"lumiaAccountImplementation\": \"", vm.toString(d.accountImplementation),
+            "\",\n  \"delegationManager\": \"", vm.toString(d.delegationManager)
         );
         string memory body = string.concat(
             head,

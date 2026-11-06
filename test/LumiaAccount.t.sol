@@ -7,6 +7,18 @@ import "../src/LumiaAccountFactory.sol";
 import {IEntryPoint} from "../lib/account-abstraction/contracts/interfaces/IEntryPoint.sol";
 import {PackedUserOperation} from "../lib/account-abstraction/contracts/interfaces/PackedUserOperation.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {
+    ModeCode,
+    ModeLib,
+    ModeSelector,
+    ModePayload,
+    CALLTYPE_SINGLE,
+    CALLTYPE_BATCH,
+    EXECTYPE_DEFAULT,
+    EXECTYPE_TRY
+} from "../lib/erc7579-implementation/src/lib/ModeLib.sol";
+import {ExecutionLib} from "../lib/erc7579-implementation/src/lib/ExecutionLib.sol";
+import {Execution} from "../lib/erc7579-implementation/src/interfaces/IERC7579Account.sol";
 
 /**
  * @title LumiaAccountTest
@@ -22,6 +34,8 @@ contract LumiaAccountTest is Test {
     
     // Test addresses
     address public entryPoint = 0x0000000071727De22E5E9d8BAf0edAc6f37da032;
+    // Pulsar/Lark testnet DelegationManager (MetaMask DF 1.3.0)
+    address public constant DELEGATION_MANAGER = 0xd2B20CDB5aFdf06d54797a032505F4E025FF99d3;
     address public owner;
     uint256 public ownerKey;
     address public beneficiary = address(0xBEEF);
@@ -36,12 +50,12 @@ contract LumiaAccountTest is Test {
         owner = vm.addr(ownerKey);
         
         // Deploy factory
-        factory = new LumiaAccountFactory(IEntryPoint(entryPoint));
+        factory = new LumiaAccountFactory(IEntryPoint(entryPoint), DELEGATION_MANAGER);
         accountImpl = factory.accountImplementation();
-        
+
         // Deploy an account
         account = factory.createAccount(owner, uint256(0));
-        
+
         // Fund the account
         vm.deal(address(account), 10 ether);
     }
@@ -99,8 +113,9 @@ contract LumiaAccountTest is Test {
         // Account should be initialized with correct owner
         assertEq(account.owner(), owner);
         assertEq(address(account.entryPoint()), entryPoint);
-        assertEq(account.version(), "2.0.0");
+        assertEq(account.version(), "3.0.0");
         assertEq(address(account.factory()), address(factory));
+        assertEq(account.delegationManager(), DELEGATION_MANAGER);
     }
 
     // ===================== Account registry & upgrade restriction =====================
@@ -122,7 +137,8 @@ contract LumiaAccountTest is Test {
     }
 
     function testUpgradeToUnapprovedImplementationReverts() public {
-        LumiaAccount rogue = new LumiaAccount(IEntryPoint(entryPoint), ILumiaAccountFactory(address(0)));
+        LumiaAccount rogue =
+            new LumiaAccount(IEntryPoint(entryPoint), ILumiaAccountFactory(address(0)), DELEGATION_MANAGER);
 
         vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(ILumiaAccount.UnapprovedImplementation.selector, address(rogue)));
@@ -135,7 +151,7 @@ contract LumiaAccountTest is Test {
     }
 
     function testUpgradeToApprovedImplementation() public {
-        LumiaAccount next = new LumiaAccount(IEntryPoint(entryPoint), factory);
+        LumiaAccount next = new LumiaAccount(IEntryPoint(entryPoint), factory, DELEGATION_MANAGER);
         factory.setImplementationApproval(address(next), true);
 
         vm.prank(owner);
@@ -144,10 +160,11 @@ contract LumiaAccountTest is Test {
         bytes32 implSlot = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
         assertEq(address(uint160(uint256(vm.load(address(account), implSlot)))), address(next));
         assertEq(account.owner(), owner);
+        assertEq(account.delegationManager(), DELEGATION_MANAGER);
     }
 
     function testUpgradeRevokedImplementationReverts() public {
-        LumiaAccount next = new LumiaAccount(IEntryPoint(entryPoint), factory);
+        LumiaAccount next = new LumiaAccount(IEntryPoint(entryPoint), factory, DELEGATION_MANAGER);
         factory.setImplementationApproval(address(next), true);
         factory.setImplementationApproval(address(next), false);
 
@@ -348,6 +365,61 @@ contract LumiaAccountTest is Test {
         assertTrue(account.supportsInterface(0x4e2312e0));
         // ERC165
         assertTrue(account.supportsInterface(0x01ffc9a7));
+    }
+
+    // ===================== ERC-1271 / DelegationManager executor =====================
+
+    function testIsValidSignatureAcceptsOwner() public view {
+        bytes32 hash = keccak256("delegation-hash");
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerKey, hash);
+        bytes memory sig = abi.encodePacked(r, s, v);
+        assertEq(account.isValidSignature(hash, sig), bytes4(0x1626ba7e));
+    }
+
+    function testIsValidSignatureRejectsNonOwner() public view {
+        bytes32 hash = keccak256("delegation-hash");
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(0x9999, hash);
+        bytes memory sig = abi.encodePacked(r, s, v);
+        assertEq(account.isValidSignature(hash, sig), bytes4(0xffffffff));
+    }
+
+    function testExecuteFromExecutorSingleOnlyDm() public {
+        ModeCode mode = ModeLib.encodeSimpleSingle();
+        bytes memory execCalldata = ExecutionLib.encodeSingle(beneficiary, 1 ether, "");
+
+        vm.expectRevert(abi.encodeWithSelector(ILumiaAccount.NotDelegationManager.selector, address(this)));
+        account.executeFromExecutor(mode, execCalldata);
+
+        vm.prank(DELEGATION_MANAGER);
+        bytes[] memory ret = account.executeFromExecutor(mode, execCalldata);
+        assertEq(ret.length, 1);
+        assertEq(beneficiary.balance, 1 ether);
+    }
+
+    function testExecuteFromExecutorBatch() public {
+        Execution[] memory executions = new Execution[](2);
+        executions[0] = Execution({target: beneficiary, value: 0.4 ether, callData: ""});
+        executions[1] = Execution({target: address(0xCAFE), value: 0.1 ether, callData: ""});
+
+        ModeCode mode = ModeLib.encode(CALLTYPE_BATCH, EXECTYPE_DEFAULT, ModeSelector.wrap(0), ModePayload.wrap(0));
+        bytes memory execCalldata = ExecutionLib.encodeBatch(executions);
+
+        vm.prank(DELEGATION_MANAGER);
+        bytes[] memory ret = account.executeFromExecutor(mode, execCalldata);
+        assertEq(ret.length, 2);
+        assertEq(beneficiary.balance, 0.4 ether);
+        assertEq(address(0xCAFE).balance, 0.1 ether);
+    }
+
+    function testExecuteFromExecutorRejectsTryExec() public {
+        ModeCode mode = ModeLib.encode(CALLTYPE_SINGLE, EXECTYPE_TRY, ModeSelector.wrap(0), ModePayload.wrap(0));
+        bytes memory execCalldata = ExecutionLib.encodeSingle(beneficiary, 0, "");
+
+        vm.prank(DELEGATION_MANAGER);
+        vm.expectRevert(
+            abi.encodeWithSelector(ILumiaAccount.UnsupportedExecType.selector, EXECTYPE_TRY)
+        );
+        account.executeFromExecutor(mode, execCalldata);
     }
 
     /**

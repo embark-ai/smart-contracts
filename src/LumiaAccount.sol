@@ -8,6 +8,17 @@ import {BaseAccount} from "../lib/account-abstraction/contracts/core/BaseAccount
 import {TokenCallbackHandler} from "../lib/account-abstraction/contracts/samples/callback/TokenCallbackHandler.sol";
 import {IEntryPoint} from "../lib/account-abstraction/contracts/interfaces/IEntryPoint.sol";
 import {PackedUserOperation} from "../lib/account-abstraction/contracts/interfaces/PackedUserOperation.sol";
+import {
+    ModeCode,
+    CallType,
+    ExecType,
+    ModeLib,
+    CALLTYPE_SINGLE,
+    CALLTYPE_BATCH,
+    EXECTYPE_DEFAULT
+} from "../lib/erc7579-implementation/src/lib/ModeLib.sol";
+import {ExecutionLib} from "../lib/erc7579-implementation/src/lib/ExecutionLib.sol";
+import {Execution} from "../lib/erc7579-implementation/src/interfaces/IERC7579Account.sol";
 import {ILumiaAccount} from "./interfaces/ILumiaAccount.sol";
 import {ILumiaAccountFactory} from "./interfaces/ILumiaAccountFactory.sol";
 
@@ -20,17 +31,29 @@ import {ILumiaAccountFactory} from "./interfaces/ILumiaAccountFactory.sol";
  * - Execute and batch execute capabilities
  * - Token callback support (ERC721/ERC1155)
  * - UUPS upgradeable pattern restricted to factory-approved implementations
+ * - ERC-1271 signatures for MetaMask Delegation Framework (ERC-7710) redeem
+ * - `executeFromExecutor` callable only by the configured DelegationManager
  * @dev The owner can upgrade the account via a UserOp with
  *      `execute(address(this), 0, upgradeToAndCall(newImpl, data))`, because `_onlyOwner`
  *      accepts `msg.sender == address(this)`. `newImpl` must be approved by the factory that
  *      deployed this implementation, so paymasters can rely on factory-registered accounts running
  *      Lumia execution semantics. See docs/AUDIT.md ("Account upgrade via self-call").
+ * @dev `delegationManager` is an immutable on the implementation. Upgrading a proxy to a new
+ *      implementation switches the DM used for `executeFromExecutor` to that impl's value.
  */
 contract LumiaAccount is ILumiaAccount, BaseAccount, TokenCallbackHandler, UUPSUpgradeable, Initializable {
+    using ModeLib for ModeCode;
+    using ExecutionLib for bytes;
+
     // Validation return values
     uint256 constant internal SIG_VALIDATION_SUCCESS = 0;
     uint256 constant internal SIG_VALIDATION_FAILED = 1;
-    
+
+    /// @dev ERC-1271 magic value
+    bytes4 internal constant ERC1271_MAGICVALUE = 0x1626ba7e;
+    /// @dev ERC-1271 invalid signature return
+    bytes4 internal constant ERC1271_FAIL = 0xffffffff;
+
     /// @notice The owner of this account
     address public owner;
 
@@ -39,6 +62,9 @@ contract LumiaAccount is ILumiaAccount, BaseAccount, TokenCallbackHandler, UUPSU
 
     /// @notice The factory that approves upgrade targets for this account
     ILumiaAccountFactory public immutable factory;
+
+    /// @notice MetaMask DelegationManager authorized to call `executeFromExecutor`
+    address public immutable delegationManager;
 
     /// @notice Ensures only the owner can call the function
     modifier onlyOwner() {
@@ -57,13 +83,20 @@ contract LumiaAccount is ILumiaAccount, BaseAccount, TokenCallbackHandler, UUPSU
     receive() external payable {}
 
     /**
-     * @notice Constructor sets the EntryPoint and the factory, and disables initializers
+     * @notice Constructor sets the EntryPoint, factory and DelegationManager, and disables initializers
      * @param anEntryPoint The EntryPoint contract address
      * @param aFactory The factory that approves upgrade targets
+     * @param aDelegationManager The DelegationManager allowed to call `executeFromExecutor`
      */
-    constructor(IEntryPoint anEntryPoint, ILumiaAccountFactory aFactory) {
+    constructor(
+        IEntryPoint anEntryPoint,
+        ILumiaAccountFactory aFactory,
+        address aDelegationManager
+    ) {
+        require(aDelegationManager != address(0), "DM zero");
         _entryPoint = anEntryPoint;
         factory = aFactory;
+        delegationManager = aDelegationManager;
         _disableInitializers();
     }
 
@@ -130,6 +163,59 @@ contract LumiaAccount is ILumiaAccount, BaseAccount, TokenCallbackHandler, UUPSU
     }
 
     /**
+     * @notice ERC-1271 signature validation for Delegation Framework EIP-712 hashes
+     * @dev The framework passes the raw typed-data hash (no EIP-191 personal_sign prefix)
+     * @param hash The hash that was signed
+     * @param signature The owner ECDSA signature
+     * @return magicValue ERC-1271 success or failure selector
+     */
+    function isValidSignature(bytes32 hash, bytes calldata signature) external view returns (bytes4 magicValue) {
+        (address recovered, ECDSA.RecoverError err) = ECDSA.tryRecover(hash, signature);
+        if (err == ECDSA.RecoverError.NoError && recovered == owner) {
+            return ERC1271_MAGICVALUE;
+        }
+        return ERC1271_FAIL;
+    }
+
+    /**
+     * @notice ERC-7579-style execution entry used by DelegationManager after ERC-7710 redeem
+     * @dev Only `delegationManager` may call. Supports CALLTYPE_SINGLE / CALLTYPE_BATCH with
+     *      EXECTYPE_DEFAULT (revert on failure).
+     * @param mode ERC-7579 mode code
+     * @param executionCalldata Encoded single or batch execution
+     * @return returnData Return data for each executed call
+     */
+    function executeFromExecutor(ModeCode mode, bytes calldata executionCalldata)
+        external
+        payable
+        returns (bytes[] memory returnData)
+    {
+        if (msg.sender != delegationManager) {
+            revert NotDelegationManager(msg.sender);
+        }
+
+        (CallType callType, ExecType execType,,) = mode.decode();
+        if (ExecType.unwrap(execType) != ExecType.unwrap(EXECTYPE_DEFAULT)) {
+            revert UnsupportedExecType(execType);
+        }
+
+        if (CallType.unwrap(callType) == CallType.unwrap(CALLTYPE_SINGLE)) {
+            (address target, uint256 value, bytes calldata callData) = executionCalldata.decodeSingle();
+            returnData = new bytes[](1);
+            returnData[0] = _callReturnData(target, value, callData);
+        } else if (CallType.unwrap(callType) == CallType.unwrap(CALLTYPE_BATCH)) {
+            Execution[] calldata executions = executionCalldata.decodeBatch();
+            returnData = new bytes[](executions.length);
+            for (uint256 i = 0; i < executions.length; i++) {
+                returnData[i] =
+                    _callReturnData(executions[i].target, executions[i].value, executions[i].callData);
+            }
+        } else {
+            revert UnsupportedCallType(callType);
+        }
+    }
+
+    /**
      * @notice Check current account deposit in the EntryPoint
      * @return The deposit amount
      */
@@ -190,6 +276,22 @@ contract LumiaAccount is ILumiaAccount, BaseAccount, TokenCallbackHandler, UUPSU
     }
 
     /**
+     * @dev Internal call that returns returndata (for executeFromExecutor)
+     */
+    function _callReturnData(address target, uint256 value, bytes memory data)
+        internal
+        returns (bytes memory result)
+    {
+        bool success;
+        (success, result) = target.call{value: value}(data);
+        if (!success) {
+            assembly {
+                revert(add(result, 32), mload(result))
+            }
+        }
+    }
+
+    /**
      * @dev Authorize an upgrade to a new implementation approved by the factory
      * @param newImplementation The new implementation address
      */
@@ -201,10 +303,10 @@ contract LumiaAccount is ILumiaAccount, BaseAccount, TokenCallbackHandler, UUPSU
     }
 
     /**
-     * @notice Get the current implementation version
+     * @notice Get the current account implementation version
      * @return Version string
      */
     function version() public pure returns (string memory) {
-        return "2.0.0";
+        return "3.0.0";
     }
 }

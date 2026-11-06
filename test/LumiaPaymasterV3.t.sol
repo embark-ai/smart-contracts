@@ -143,7 +143,8 @@ contract LumiaPaymasterV3Test is Test {
     // ===================== Account Factory Restriction =====================
 
     function testAccountFactoryRestrictsSenders() public {
-        LumiaAccountFactory factory = new LumiaAccountFactory(IEntryPoint(address(entryPoint)));
+        LumiaAccountFactory factory =
+            new LumiaAccountFactory(IEntryPoint(address(entryPoint)), address(0xD10));
         address registered = address(factory.createAccount(user, 0));
 
         vm.expectEmit(true, false, false, false);

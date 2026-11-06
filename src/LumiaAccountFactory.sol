@@ -25,9 +25,12 @@ import {ILumiaAccountFactory} from "./interfaces/ILumiaAccountFactory.sol";
 contract LumiaAccountFactory is ILumiaAccountFactory, Ownable {
     /// @notice The LumiaAccount implementation contract
     LumiaAccount public immutable accountImplementation;
-    
+
     /// @notice The EntryPoint contract
     IEntryPoint public immutable entryPoint;
+
+    /// @notice DelegationManager baked into the default account implementation
+    address public immutable delegationManager;
 
     /// @inheritdoc ILumiaAccountFactory
     mapping(address => bool) public isAccount;
@@ -38,10 +41,14 @@ contract LumiaAccountFactory is ILumiaAccountFactory, Ownable {
     /**
      * @notice Constructor deploys and approves the implementation contract; the deployer becomes owner
      * @param _entryPoint The EntryPoint contract address
+     * @param _delegationManager MetaMask DelegationManager for ERC-7710 (immutable on the account impl)
      */
-    constructor(IEntryPoint _entryPoint) {
+    constructor(IEntryPoint _entryPoint, address _delegationManager) {
+        require(_delegationManager != address(0), "DM zero");
         entryPoint = _entryPoint;
-        accountImplementation = new LumiaAccount(_entryPoint, ILumiaAccountFactory(address(this)));
+        delegationManager = _delegationManager;
+        accountImplementation =
+            new LumiaAccount(_entryPoint, ILumiaAccountFactory(address(this)), _delegationManager);
         isApprovedImplementation[address(accountImplementation)] = true;
         emit ImplementationApprovalUpdated(address(accountImplementation), true);
     }
